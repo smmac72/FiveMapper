@@ -29,4 +29,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: FiveMapper-exe
-          path: build/msvc-x64/Release/FiveMapper.exe
+          path: build/Release/FiveMapper.exe
