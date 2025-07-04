@@ -26,7 +26,7 @@ jobs:
         run: cmake --build --preset win64-msvc-release
 
       - name: Upload executable
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: FiveMapper-exe
           path: build/msvc-x64/Release/FiveMapper.exe
