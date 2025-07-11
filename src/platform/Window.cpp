@@ -1,4 +1,4 @@
-#include "Window.h"
+﻿#include "Window.h"
 #include <vector>
 
 Window::Window(HINSTANCE hInst, const WindowConfig& cfg) : _hInst(hInst), _cfg(cfg)
@@ -11,12 +11,7 @@ Window::Window(HINSTANCE hInst, const WindowConfig& cfg) : _hInst(hInst), _cfg(c
 
 Window::~Window()
 {
-    wchar_t buf[MAX_PATH];
-    DWORD len = GetEnvironmentVariableW(L"APPDATA", buf, MAX_PATH);
-    if (len > 0 && len < MAX_PATH) {
-        std::wstring configPath = std::wstring(buf) + L"\\FiveMapper\\config.json";
-        _cfg.save(configPath);
-    }
+    _cfg.save();
 }
 
 bool Window::processMessages()
@@ -37,6 +32,19 @@ void Window::getSize(int& w, int& h) const
     GetClientRect(_hwnd, &r);
     w = r.right - r.left;
     h = r.bottom - r.top;
+}
+
+uint32_t Window::getClientWidth() const 
+{
+    RECT r;
+    GetClientRect(_hwnd, &r);
+    return r.right - r.left;
+}
+uint32_t Window::getClientHeight() const 
+{
+    RECT r;
+    GetClientRect(_hwnd, &r);
+    return r.bottom - r.top;
 }
 
 POINT Window::getMouseDelta()
@@ -66,6 +74,7 @@ void Window::registerClass()
     wc.lpfnWndProc = WndProc;
     wc.hInstance = _hInst;
     wc.lpszClassName = L"FiveMapperWindowClass";
+    wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
     RegisterClassExW(&wc);
 }
 
@@ -158,15 +167,15 @@ LRESULT CALLBACK Window::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             self->onResize(newW, newH);
         }
         break;
-    case WM_LBUTTONDOWN:
-        SetCapture(hwnd);
-        self->_captured = true;
-        ShowCursor(FALSE);
+    //case WM_LBUTTONDOWN: - TODO probably for interacting with objects
+        //SetCapture(hwnd);
+        //self->_captured = true;
+        //ShowCursor(FALSE);
         break;
-    case WM_LBUTTONUP:
-        ReleaseCapture();
-        self->_captured = false;
-        ShowCursor(TRUE);
+    //case WM_LBUTTONUP: - TODO or not, better do a cool cursor than make it disappear
+        //ReleaseCapture();
+        //self->_captured = false;
+        //ShowCursor(TRUE);
         break;
     case WM_DESTROY:
         PostQuitMessage(0);

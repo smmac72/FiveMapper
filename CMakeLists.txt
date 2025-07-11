@@ -13,24 +13,30 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_compile_options(/W4 /permissive- /WX)
 
-# Исходники
 set(SOURCES
     src/main.cpp
     src/platform/Window.cpp
+    src/dx12/DeviceResources.cpp
 )
 
-# Заголовки (чтобы IDE их подхватила)
 set(HEADERS
     src/platform/Window.h
+    src/dx12/DeviceResources.h
 )
 
 add_executable(FiveMapper WIN32 ${SOURCES} ${HEADERS})
 
 target_link_libraries(FiveMapper
-    PRIVATE nlohmann_json::nlohmann_json
+    PRIVATE 
+      nlohmann_json::nlohmann_json
+      d3d12.lib
+      dxgi.lib
+      dxguid.lib
 )
 
-# Указываем, где искать наши заголовки
 target_include_directories(FiveMapper
-  PRIVATE ${CMAKE_SOURCE_DIR}/src
+  PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/platform
+    ${CMAKE_SOURCE_DIR}/src/dx12
 )

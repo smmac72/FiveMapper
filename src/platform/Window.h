@@ -14,9 +14,14 @@ struct WindowConfig
     int height = 720;
     bool borderless = false;
 
-    static WindowConfig load(const std::wstring& path)
+    static WindowConfig load()
     {
         WindowConfig cfg;
+
+        wchar_t buf[MAX_PATH];
+        GetEnvironmentVariableW(L"APPDATA", buf, MAX_PATH);
+        std::wstring path = std::wstring(buf) + L"\\FiveMapper\\config.json";
+
         std::filesystem::path p(path);
         std::ifstream f(p.u8string());
         if (f)
@@ -35,8 +40,12 @@ struct WindowConfig
         return cfg;
     }
 
-    void save(const std::wstring& path) const
+    void save() const
     {
+        wchar_t buf[MAX_PATH];
+        GetEnvironmentVariableW(L"APPDATA", buf, MAX_PATH);
+        std::wstring path = std::wstring(buf) + L"\\FiveMapper\\config.json";
+
         nlohmann::json j;
         j["window"]["x"] = x;
         j["window"]["y"] = y;
@@ -59,9 +68,11 @@ public:
     bool processMessages();
     void toggleBorderless();
     void getSize(int& w, int& h) const;
+    uint32_t getClientWidth() const;
+    uint32_t getClientHeight() const;
     POINT getMouseDelta();
 
-    HWND handle() const { return _hwnd; }
+    HWND getHWND() const { return _hwnd; }
 
 private:
     void registerClass();
