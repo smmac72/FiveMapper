@@ -6,6 +6,7 @@
 #include <assert.h>
 
 using Microsoft::WRL::ComPtr;
+using namespace dx12;
 
 DeviceResources::DeviceResources(HWND hwnd, uint32_t width, uint32_t height)
 : m_hwnd(hwnd), m_width(width), m_height(height), m_frameIndex(0), m_fenceEvent(nullptr)

@@ -5,6 +5,8 @@
 #include <dxgi1_6.h>
 #include <cstdint>
 #include <vector>
+namespace dx12
+{
 
 class DeviceResources
 {
@@ -72,3 +74,5 @@ private:
     D3D12_VIEWPORT m_viewport;
     D3D12_RECT m_scissorRect;
 };
+
+}

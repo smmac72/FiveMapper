@@ -4,6 +4,8 @@
 #include <dxgi1_6.h>
 #include "platform/Window.h"
 #include "dx12/DeviceResources.h"
+#include "dx12/GBufferPipeline.h"
+#include "dx12/GBufferRootSignature.h"
 
 using Microsoft::WRL::ComPtr;
 
@@ -22,8 +24,26 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int)
     uint32_t height = window.getClientHeight();
 
     // initialize DX12
-    DeviceResources devRes(hwnd, width, height);
+    dx12::DeviceResources devRes(hwnd, width, height);
     devRes.Initialize(/*enableGpuValidation=*/true);
+
+    // initialize g-buffer root signature and PSO
+    dx12::GBufferRootSignature gbufRS;
+    gbufRS.Initialize(devRes.GetDevice());
+
+    dx12::GBufferPipeline gBufPipeline;
+    DXGI_FORMAT rtvFormats[4] = {
+        DXGI_FORMAT_R8G8B8A8_UNORM, // albedo + occlusion
+        DXGI_FORMAT_R16G16B16A16_FLOAT, // normal.xy + roughness
+        DXGI_FORMAT_R8G8B8A8_UNORM, // metallix + emissive
+        DXGI_FORMAT_R8G8B8A8_UNORM // depthstencil
+    };
+    gBufPipeline.Initialize(
+        devRes.GetDevice(),
+        gbufRS.Get(),
+        rtvFormats,
+        DXGI_FORMAT_D32_FLOAT_S8X24_UINT
+    );
 
     // command allocator and command list
     ComPtr<ID3D12CommandAllocator>    cmdAlloc;
@@ -47,6 +67,10 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int)
 
         cmdAlloc->Reset();
         cmdList->Reset(cmdAlloc.Get(), nullptr);
+
+        cmdList->SetGraphicsRootSignature(gbufRS.Get());
+        cmdList->SetPipelineState(gBufPipeline.GetPSO());
+
 
         // barrier Present -> RenderTarget
         {
