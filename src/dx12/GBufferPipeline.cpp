@@ -72,10 +72,11 @@ void GBufferPipeline::Initialize(
     desc.SampleMask = UINT_MAX;
 
     // disable blending (mixing new color with existing in rtv) for g-buffer write-overs
-    desc.BlendState.RenderTarget[0].BlendEnable = false;
-    desc.BlendState.RenderTarget[1].BlendEnable = false;
-    desc.BlendState.RenderTarget[2].BlendEnable = false;
-    desc.BlendState.RenderTarget[3].BlendEnable = false;
+    ZeroMemory(&desc.BlendState, sizeof(desc.BlendState));
+    for (int i = 0; i < 4; ++i) {
+        desc.BlendState.RenderTarget[i].BlendEnable = FALSE;
+        desc.BlendState.RenderTarget[i].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL; // to write rgba
+    }
 
     // depthstencil - mix of z-buffer and mask (pixel counter) to draw if something's drawn there
     desc.DepthStencilState.DepthEnable = true;

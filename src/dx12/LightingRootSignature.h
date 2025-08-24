@@ -6,7 +6,7 @@
 namespace dx12
 {
 
-class GBufferRootSignature
+class LightingRootSignature
 {
 public:
     void Initialize(ID3D12Device* device);

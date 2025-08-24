@@ -6,7 +6,7 @@ using namespace dx12;
 
 void GBufferRootSignature::Initialize(ID3D12Device* device)
 {
-    // texture slots
+    // SRV for shader input - all the textures
     // t0 - albedo+alpha/mask || t1 - normal || t2 - specular
     // t3 - emissive || t4 - displacement || t5 - detail albedo || t6 - detail normal
     D3D12_DESCRIPTOR_RANGE1 srvRange = {};
@@ -19,22 +19,22 @@ void GBufferRootSignature::Initialize(ID3D12Device* device)
 
     // root parameters
     D3D12_ROOT_PARAMETER1 rootParams[4] = {};
-    // CBV for camera matrices
+    // CBV for camera matrices (VS)
     rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
     rootParams[0].Descriptor.RegisterSpace = 0;
     rootParams[0].Descriptor.ShaderRegister = 0;
-    // CBV for object constants
+    // CBV for object constants (VS + PS)
     rootParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     rootParams[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
     rootParams[1].Descriptor.RegisterSpace = 0;
     rootParams[1].Descriptor.ShaderRegister = 1;
-    // CBV for global illumination
+    // CBV for global illumination (PS)
     rootParams[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     rootParams[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
     rootParams[2].Descriptor.RegisterSpace = 0;
     rootParams[2].Descriptor.ShaderRegister = 2;
-    // Descriptor table for our texture slots
+    // Descriptor table for the SRV
     rootParams[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
     rootParams[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
     rootParams[3].DescriptorTable.NumDescriptorRanges = 1;
@@ -89,7 +89,7 @@ void GBufferRootSignature::Initialize(ID3D12Device* device)
         {
             OutputDebugStringA((char*)err->GetBufferPointer());
         }
-        throw std::runtime_error("Failed to serialize root signature");
+        throw std::runtime_error("G-Buffer RS serialization failed");
     }
 
     hr = device->CreateRootSignature(
@@ -100,6 +100,6 @@ void GBufferRootSignature::Initialize(ID3D12Device* device)
     );
     if (FAILED(hr))
     {
-        throw std::runtime_error("Failed to create root signature");
+        throw std::runtime_error("G-Buffer RS creation failed");
     }
 }
