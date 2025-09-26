@@ -21,10 +21,10 @@ void LightingRootSignature::Initialize(ID3D12Device* device)
     // t0..t5: g0..g3, depth, shadow
     D3D12_DESCRIPTOR_RANGE1 range{};
     range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    range.NumDescriptors = 6;     // было 5
+    range.NumDescriptors = 6;
     range.BaseShaderRegister = 0; // t0
     range.RegisterSpace = 0;
-    range.Flags = D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC;
+    range.Flags = D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC_WHILE_SET_AT_EXECUTE; // <-- было DATA_STATIC
     range.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
     params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
@@ -52,6 +52,8 @@ void LightingRootSignature::Initialize(ID3D12Device* device)
     ss[2].ComparisonFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
     ss[2].ShaderRegister = 2; // SShadow
     ss[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    ss[2].BorderColor = D3D12_STATIC_BORDER_COLOR_OPAQUE_WHITE; // outside shadowmap => fully lit
+
 
     D3D12_VERSIONED_ROOT_SIGNATURE_DESC rs{};
     rs.Version = D3D_ROOT_SIGNATURE_VERSION_1_1;

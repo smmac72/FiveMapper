@@ -1,4 +1,4 @@
-#include "DeviceResources.h"
+﻿#include "DeviceResources.h"
 #include <d3d12sdklayers.h>
 #include <stdexcept>
 #include <string>
@@ -7,11 +7,11 @@ using Microsoft::WRL::ComPtr;
 using namespace dx12;
 
 static void LOGA(const char* s)  { OutputDebugStringA(s); }
-static void LOGW(const wchar_t* s){ OutputDebugStringW(s); }
 
 DeviceResources::DeviceResources(HWND hwnd, uint32_t width, uint32_t height)
     : m_hwnd(hwnd), m_width(width), m_height(height)
-{}
+{
+}
 
 DeviceResources::~DeviceResources()
 {
@@ -21,7 +21,7 @@ DeviceResources::~DeviceResources()
 
 void DeviceResources::Initialize(bool enableGpuValidation)
 {
-    // 1 - Debug layer
+    // 1 - debug layer
     if (enableGpuValidation)
     {
         ComPtr<ID3D12Debug> dbg;
@@ -36,13 +36,13 @@ void DeviceResources::Initialize(bool enableGpuValidation)
         }
     }
 
-    // 2 - Factory
+    // 2 - factory
     CreateFactory(enableGpuValidation);
 
-    // 3 - Device
+    // 3 - device
     SelectAdapterAndCreateDevice();
 
-    // 4 - InfoQueue
+    // 4 - info queue
     if (SUCCEEDED(m_device.As(&m_infoQueue)))
     {
         m_infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_CORRUPTION, FALSE);
@@ -50,7 +50,7 @@ void DeviceResources::Initialize(bool enableGpuValidation)
         m_infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_WARNING,    FALSE);
     }
 
-    // 5 - Queue + SwapChain + RTVs + Fence + VP/Scissor
+    // 5 - queue + swapchain + rtvs + fence + vp/scissor
     CreateCommandQueue();
     CreateSwapChain();
     CreateRTVHeapAndTargets();
@@ -87,7 +87,8 @@ void DeviceResources::SelectAdapterAndCreateDevice()
 
 void DeviceResources::CreateCommandQueue()
 {
-    D3D12_COMMAND_QUEUE_DESC q{}; q.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+    D3D12_COMMAND_QUEUE_DESC q{};
+    q.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
     if (FAILED(m_device->CreateCommandQueue(&q, IID_PPV_ARGS(&m_directQueue))))
         throw std::runtime_error("CreateCommandQueue failed");
 }
@@ -112,6 +113,8 @@ void DeviceResources::CreateSwapChain()
         throw std::runtime_error("SwapChain1->SwapChain3 cast failed");
 
     m_factory->MakeWindowAssociation(m_hwnd, DXGI_MWA_NO_ALT_ENTER);
+
+    // текущий индекс back buffer (с этого начинаем кадр)
     m_frameIndex = m_swapChain->GetCurrentBackBufferIndex();
 }
 
@@ -127,7 +130,8 @@ void DeviceResources::CreateRTVHeapAndTargets()
     m_rtvDescriptorSize = m_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
 
     D3D12_CPU_DESCRIPTOR_HANDLE handle = m_rtvHeap->GetCPUDescriptorHandleForHeapStart();
-    for (UINT i = 0; i < kFrameCount; ++i) {
+    for (UINT i = 0; i < kFrameCount; ++i)
+    {
         if (FAILED(m_swapChain->GetBuffer(i, IID_PPV_ARGS(&m_renderTargets[i]))))
             throw std::runtime_error("SwapChain GetBuffer failed");
         m_device->CreateRenderTargetView(m_renderTargets[i].Get(), nullptr, handle);
@@ -140,7 +144,9 @@ void DeviceResources::CreateFenceObjects()
     if (FAILED(m_device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&m_fence))))
         throw std::runtime_error("CreateFence failed");
 
-    for (UINT i = 0; i < kFrameCount; ++i) m_fenceValue[i] = 0;
+    // изначально все 0, GPU ещё ничего не исполнял
+    for (UINT i = 0; i < kFrameCount; ++i) m_frameFenceValue[i] = 0;
+    m_fenceLastSignaled = 0;
 
     m_fenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
     if (!m_fenceEvent) throw std::runtime_error("CreateEvent failed");
@@ -159,26 +165,35 @@ D3D12_CPU_DESCRIPTOR_HANDLE DeviceResources::GetCurrentRTV() const
     return h;
 }
 
-void DeviceResources::WaitForPreviousFrame() noexcept
+// --- новая схема синхронизации ---
+
+void DeviceResources::BeginFrame() noexcept
 {
-    const uint64_t currentFence = m_fenceValue[m_frameIndex];
-    m_directQueue->Signal(m_fence.Get(), currentFence);
-
-    // get next inded
-    m_frameIndex = m_swapChain->GetCurrentBackBufferIndex();
-
-    if (m_fence->GetCompletedValue() < m_fenceValue[m_frameIndex]) {
-        m_fence->SetEventOnCompletion(m_fenceValue[m_frameIndex], m_fenceEvent);
+    // ждём fence, связанный с текущим frameIndex
+    const UINT64 fenceToWait = m_frameFenceValue[m_frameIndex];
+    if (m_fence->GetCompletedValue() < fenceToWait)
+    {
+        m_fence->SetEventOnCompletion(fenceToWait, m_fenceEvent);
         WaitForSingleObject(m_fenceEvent, INFINITE);
     }
+}
 
-    // move the fence value
-    m_fenceValue[m_frameIndex] = currentFence + 1;
+void DeviceResources::EndFrame() noexcept
+{
+    // сигналим новый fence, привязываем его к ТЕКУЩЕМУ индексу
+    const UINT64 fenceToSignal = ++m_fenceLastSignaled;
+    m_directQueue->Signal(m_fence.Get(), fenceToSignal);
+    m_frameFenceValue[m_frameIndex] = fenceToSignal;
+
+    // после Present драйвер обновит индекс back buffer — читаем его
+    m_frameIndex = m_swapChain->GetCurrentBackBufferIndex();
 }
 
 void DeviceResources::WaitForGpu() noexcept
 {
-    m_directQueue->Signal(m_fence.Get(), m_fenceValue[m_frameIndex]);
-    m_fence->SetEventOnCompletion(m_fenceValue[m_frameIndex], m_fenceEvent);
+    // блокирующее ожидание (на выключение)
+    const UINT64 fenceToSignal = ++m_fenceLastSignaled;
+    m_directQueue->Signal(m_fence.Get(), fenceToSignal);
+    m_fence->SetEventOnCompletion(fenceToSignal, m_fenceEvent);
     WaitForSingleObject(m_fenceEvent, INFINITE);
 }

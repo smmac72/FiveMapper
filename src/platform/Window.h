@@ -24,25 +24,40 @@ public:
     // returns and resets per–frame raw mouse delta
     POINT getMouseDelta()
     {
+        // if window is inactive or mouse not captured, report no movement
+        if (!_active || !_captured)
+        {
+            _mouseDelta.x = 0;
+            _mouseDelta.y = 0;
+            return POINT{0,0};
+        }
         POINT d = _mouseDelta;
         _mouseDelta.x = 0;
         _mouseDelta.y = 0;
         return d;
     }
 
-    // hybrid key state: our cached state OR winapi async bit
-    // this makes input robust even if some messages are missed
+    // hybrid key state: cached OR winapi async bit; disabled when inactive
     bool isKeyDown(int vk) const
     {
+        if (!_active) return false;
         if (vk < 0 || vk > 255) return false;
-        // note: GetAsyncKeyState returns short with high bit = down
         return _keyDown[vk] || ((GetAsyncKeyState(vk) & 0x8000) != 0);
     }
 
-    // optional alias
     bool keyDown(int vk) const
     {
         return isKeyDown(vk);
+    }
+
+    bool isActive() const
+    {
+        return _active;
+    }
+
+    bool isMouseCaptured() const
+    {
+        return _captured;
     }
 
     void toggleBorderless();
@@ -65,6 +80,9 @@ private:
 
     // true while lmb is held and mouse is captured
     bool _captured = false;
+
+    // window active/focused flag
+    bool _active = true;
 
     // keyboard state (per virtual-key code)
     bool _keyDown[256] = {};

@@ -1,6 +1,6 @@
 ﻿#include "Window.h"
-#include <vector>
 #include <cstring>
+#include <vector>
 
 static void LOGW(const wchar_t* s)
 {
@@ -166,21 +166,40 @@ LRESULT CALLBACK Window::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     {
     case WM_ACTIVATE:
     {
-        if (LOWORD(wp) == WA_INACTIVE)
+        const bool becameActive = (LOWORD(wp) != WA_INACTIVE);
+        self->_active = becameActive;
+
+        if (!becameActive)
         {
+            // drop input state on deactivation
             std::memset(self->_keyDown, 0, sizeof(self->_keyDown));
+            self->_mouseDelta = {0,0};
+
+            if (self->_captured)
+            {
+                ReleaseCapture();
+                self->_captured = false;
+                ShowCursor(TRUE);
+            }
         }
         break;
     }
 
     case WM_KILLFOCUS:
     {
+        self->_active = false;
         std::memset(self->_keyDown, 0, sizeof(self->_keyDown));
+        self->_mouseDelta = {0,0};
         break;
     }
 
     case WM_INPUT:
     {
+        if (!self->_active)
+        {
+            break; // ignore raw input when inactive
+        }
+
         UINT size = 0;
         GetRawInputData(reinterpret_cast<HRAWINPUT>(lp), RID_INPUT, nullptr, &size, sizeof(RAWINPUTHEADER));
         if (size == 0) break;
@@ -224,6 +243,8 @@ LRESULT CALLBACK Window::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_KEYDOWN:
     case WM_SYSKEYDOWN:
     {
+        if (!self->_active) break;
+
         int vk = static_cast<int>(wp & 0xFF);
         if (vk >= 0 && vk <= 255)
         {
@@ -274,7 +295,6 @@ LRESULT CALLBACK Window::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         SetCapture(hwnd);
         self->_captured = true;
         ShowCursor(FALSE);
-        // ensure keyboard focus during capture
         SetForegroundWindow(hwnd);
         SetFocus(hwnd);
         break;

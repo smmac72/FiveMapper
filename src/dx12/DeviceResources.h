@@ -18,8 +18,11 @@ public:
 
     void Initialize(bool enableGpuValidation);
 
-    // frame sync
-    void WaitForPreviousFrame() noexcept;
+    // frame sync (новая схема: begin/end)
+    void BeginFrame() noexcept;   // wait fence for current frame index
+    void EndFrame()   noexcept;   // signal fence, store per-frame, advance index
+
+    // blocking wait for shutdown
     void WaitForGpu() noexcept;
 
     // getters
@@ -28,6 +31,7 @@ public:
     ID3D12CommandQueue*     GetDirectQueue() const { return m_directQueue.Get(); }
     ID3D12Resource*         GetCurrentRT()   const { return m_renderTargets[m_frameIndex].Get(); }
     D3D12_CPU_DESCRIPTOR_HANDLE GetCurrentRTV() const;
+    UINT                    GetFrameIndex()  const { return m_frameIndex; }
 
     uint32_t GetWidth()  const { return m_width; }
     uint32_t GetHeight() const { return m_height; }
@@ -58,8 +62,10 @@ private:
     Microsoft::WRL::ComPtr<ID3D12Resource>      m_renderTargets[kFrameCount];
     UINT                                         m_frameIndex = 0;
 
+    // fence: per-frame last signaled values + global counter
     Microsoft::WRL::ComPtr<ID3D12Fence>         m_fence;
-    uint64_t                                     m_fenceValue[kFrameCount] = {};
+    uint64_t                                     m_frameFenceValue[kFrameCount] = {}; // на какой fence «закрыт» этот кадр
+    uint64_t                                     m_fenceLastSignaled = 0;             // монотонный счётчик
     HANDLE                                       m_fenceEvent = nullptr;
 
     D3D12_VIEWPORT m_viewport{};

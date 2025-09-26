@@ -3,12 +3,12 @@
 
 cbuffer CameraCB : register(b0)
 {
-    float4x4 gViewProj; // row_major handled on CPU side; we treat as standard here
+    row_major float4x4 gViewProj; // <-- важно: row_major
 };
 
 cbuffer ObjectCB : register(b1)
 {
-    float4x4 gWorld;
+    row_major float4x4 gWorld;    // <-- важно: row_major
 };
 
 struct VSIn
@@ -35,10 +35,10 @@ VSOut VSMain(VSIn v)
     float3 nw = normalize(mul(float4(v.nrm, 0.0), gWorld).xyz);
     float4 tw = float4(normalize(mul(float4(v.tan.xyz, 0.0), gWorld).xyz), v.tan.w);
 
-    o.pos = mul(pw, gViewProj);
+    o.pos  = mul(pw, gViewProj);
     o.nrmW = nw;
     o.tanW = tw;
-    o.uv = v.uv;
+    o.uv   = v.uv;
 
     return o;
 }

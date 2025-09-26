@@ -88,17 +88,18 @@ float ShadowVisibility(float3 P)
     float4 pL = mul(float4(P,1), gLightViewProj);
     float  w  = max(pL.w, 1e-6);
     float2 uv = pL.xy / w * 0.5 + 0.5;
-    float  z  = pL.z / w;    // 0..1 в D3D при ortho/persp
+    float  z  = pL.z / w; // d3d 0..1
 
-    // вне карты — считаем, что освещён
+    // outside the map -> lit
     if (any(uv < 0.0) || any(uv > 1.0))
         return 1.0;
 
-    // hardware PCF: linear + comparison
+    // hardware pcf compare; note: bias in world->light space
     float cmp = z - gShadowBias;
     float vis = ShadowMap.SampleCmpLevelZero(SShadow, uv, cmp);
-    return vis; // 0..1
+    return saturate(vis);
 }
+
 
 float4 PSMain(PSIn i) : SV_Target
 {

@@ -29,7 +29,7 @@ void GBufferPipeline::Initialize(
     // rasterizer state without d3dx12 helpers
     D3D12_RASTERIZER_DESC rast{};
     rast.FillMode = D3D12_FILL_MODE_SOLID;
-    rast.CullMode = D3D12_CULL_MODE_BACK; // cull back faces for right-handed z-up
+    rast.CullMode = D3D12_CULL_MODE_NONE; // cull back faces for right-handed z-up
     rast.FrontCounterClockwise = FALSE;   // keep default winding
     rast.DepthBias = D3D12_DEFAULT_DEPTH_BIAS; // 0
     rast.DepthBiasClamp = 0.0f;
