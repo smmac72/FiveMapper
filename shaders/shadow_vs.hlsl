@@ -26,5 +26,5 @@ VSOut VSMain(VSIn v)
     VSOut o;
     float4 pw = mul(float4(v.pos, 1.0), gWorld);
     o.pos = mul(pw, gLightViewProj);
-    return o;
+    return o; // depth-only
 }
