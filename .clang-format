@@ -1,4 +1,40 @@
 BasedOnStyle: Google
-IndentWidth: 4
-ColumnLimit: 100
+
+
+BreakBeforeBraces: Allman
 AllowShortIfStatementsOnASingleLine: false
+AllowShortFunctionsOnASingleLine: Empty
+AllowShortLoopsOnASingleLine: false
+
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+NamespaceIndentation: None
+AccessModifierOffset: -4
+AlignConsecutiveAssignments: false
+AlignConsecutiveDeclarations: false
+AlignEscapedNewlines: Left
+AlignOperands: true
+AlignAfterOpenBracket: Align
+SpaceBeforeParens: ControlStatements
+SpacesInParentheses: false
+SpacesInSquareBrackets: false
+SpaceAfterCStyleCast: true
+SpaceBeforeSquareBrackets: false
+
+PointerAlignment: Left
+DerivePointerAlignment: false
+ReferenceAlignment: Left
+
+IncludeBlocks: Preserve
+SortIncludes: false
+
+ColumnLimit: 120
+
+LambdaBodyIndentation: Signature
+
+AllowAllParametersOfDeclarationOnNextLine: false
+
+ReflowComments: false
+
+DisableFormat:   false

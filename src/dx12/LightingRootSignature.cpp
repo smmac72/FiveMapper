@@ -58,7 +58,7 @@ void LightingRootSignature::Initialize(ID3D12Device* device)
     samplers[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
     // create root signature
-    // same as the g-buffer one
+    // same as the g-buffer
     D3D12_VERSIONED_ROOT_SIGNATURE_DESC rsDesc = {};
     rsDesc.Version                      = D3D_ROOT_SIGNATURE_VERSION_1_1;
     rsDesc.Desc_1_1.NumParameters       = _countof(params);
