@@ -33,6 +33,8 @@ add_executable(FiveMapper WIN32
   src/dx12/LightingRootSignature.cpp
   src/dx12/LightingPipeline.h
   src/dx12/LightingPipeline.cpp
+  src/dx12/ShadowMap.cpp
+  src/dx12/ShadowMap.h
 )
 
 target_link_libraries(FiveMapper
