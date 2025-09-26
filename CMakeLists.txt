@@ -11,24 +11,29 @@ FetchContent_MakeAvailable(nlohmann_json)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-add_compile_options(/W4 /permissive- /WX)
+add_compile_options(/W4 /permissive-)
 
-set(SOURCES
-    src/main.cpp
-    src/platform/Window.cpp
-    src/dx12/DeviceResources.cpp
-    src/dx12/GBufferPipeline.cpp
-    src/dx12/GBufferRootSignature.cpp
+add_executable(FiveMapper WIN32
+  src/main.cpp
+  src/platform/Window.h
+  src/platform/Window.cpp
+  src/platform/WindowConfig.h
+  src/platform/WindowConfig.cpp
+  src/dx12/DeviceResources.h
+  src/dx12/DeviceResources.cpp
+  src/dx12/GBufferTargets.h
+  src/dx12/GBufferTargets.cpp
+  src/dx12/GBufferRootSignature.h
+  src/dx12/GBufferRootSignature.cpp
+  src/dx12/GBufferPipeline.h
+  src/dx12/GBufferPipeline.cpp
+  src/dx12/ShaderUtils.h
+  src/dx12/ShaderUtils.cpp
+  src/dx12/LightingRootSignature.h
+  src/dx12/LightingRootSignature.cpp
+  src/dx12/LightingPipeline.h
+  src/dx12/LightingPipeline.cpp
 )
-
-set(HEADERS
-    src/platform/Window.h
-    src/dx12/DeviceResources.h
-    src/dx12/GBufferPipeline.h
-    src/dx12/GBufferRootSignature.h
-)
-
-add_executable(FiveMapper WIN32 ${SOURCES} ${HEADERS})
 
 target_link_libraries(FiveMapper
     PRIVATE 

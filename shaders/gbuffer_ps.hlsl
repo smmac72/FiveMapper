@@ -1,38 +1,38 @@
-Texture2D GBufferTex[7] : register(t0);  
-SamplerState sampLinear : register(s0);
+// simple g-buffer pixel shader
+// we do not sample any textures yet
+// we just pack reasonable defaults to test mrt
 
-struct PSInput
+struct PSIn
 {
-    float4 posSV : SV_POSITION;
-    float3 normal: NORMAL;
-    float3 tangent: TANGENT;
-    float2 uv    : TEXCOORD0;
+    float4 pos : SV_Position;
+    float3 nrm : TEXCOORD0;
+    float2 uv  : TEXCOORD1;
 };
 
-struct PSOutput
+struct PSOut
 {
-    float4 RTV0 : SV_Target0;   // Albedo + Occ
-    float4 RTV1 : SV_Target1;   // Normal.xy + Roughness
-    float4 RTV2 : SV_Target2;   // Specular + Emissive
-    float4 RTV3 : SV_Target3;   // Extra
+    float4 g0 : SV_Target0; // albedo + alpha
+    float4 g1 : SV_Target1; // normal.xyz + roughness
+    float4 g2 : SV_Target2; // metallic + occlusion + emissive
+    float4 g3 : SV_Target3; // reserved / extra
 };
 
-PSOutput PSMain(PSInput IN)
+PSOut PSMain(PSIn i)
 {
-    PSOutput OUT;
+    PSOut o;
 
-    float4 albedo    = GBufferTex[0].Sample(sampLinear, IN.uv);
-    float4 normalMap = GBufferTex[1].Sample(sampLinear, IN.uv);
-    float4 orm       = GBufferTex[2].Sample(sampLinear, IN.uv);
-    float4 emissive  = GBufferTex[3].Sample(sampLinear, IN.uv);
-    float4 height    = GBufferTex[4].Sample(sampLinear, IN.uv);
-    float4 detailAlb = GBufferTex[5].Sample(sampLinear, IN.uv);
-    float4 detailNrm = GBufferTex[6].Sample(sampLinear, IN.uv);
+    // write neutral albedo
+    o.g0 = float4(0.8, 0.75, 0.7, 1.0);
 
-    OUT.RTV0 = albedo;
-    OUT.RTV1 = float4(normalMap.xy, orm.g, 1.0);
-    OUT.RTV2 = float4(orm.r, orm.b, emissive.r, 1.0); 
-    OUT.RTV3 = float4(height.r, detailAlb.r, detailNrm.r, 1.0);
+    // encode normal in 0..1 and roughness in alpha
+    float3 n = normalize(i.nrm) * 0.5 + 0.5;
+    o.g1 = float4(n, 0.5); // roughness = 0.5
 
-    return OUT;
+    // metallic, occlusion, emissive
+    o.g2 = float4(0.0, 1.0, 0.0, 0.0); // met=0, ao=1, emissive=0
+
+    // leave as zero
+    o.g3 = float4(0,0,0,0);
+
+    return o;
 }

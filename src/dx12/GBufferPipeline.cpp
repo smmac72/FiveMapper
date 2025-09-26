@@ -1,97 +1,103 @@
 #include "GBufferPipeline.h"
-#include <d3dcompiler.h>
-#include <fstream>
-#include <vector>
+#include "ShaderUtils.h"
 #include <stdexcept>
-#include <codecvt>
 
 using Microsoft::WRL::ComPtr;
 using namespace dx12;
 
-// read shader file into d3dblob
-ComPtr<ID3DBlob> dx12::ReadFileToBlob(const std::wstring& path)
-{
-    std::ifstream file(path, std::ios::binary | std::ios::ate);
-    if (!file)
-    {
-        throw std::runtime_error("Failed to open shader file");
-    }
-
-    auto size = file.tellg();
-    file.seekg(0);
-
-    ComPtr<ID3DBlob> blob;
-    HRESULT hr = D3DCreateBlob(size, &blob);
-    if (FAILED(hr))
-    {
-        throw std::runtime_error("D3DCreateBlob failed");
-    }
-
-    if (!file.read(reinterpret_cast<char*>(blob->GetBufferPointer()), size))
-    {
-        throw std::runtime_error("Failed to read entire shader file");
-    }
-    return blob;
-}
-
-// create the PSO for the g-buffer geometry pass
 void GBufferPipeline::Initialize(
-                                ID3D12Device* device,
-                                ID3D12RootSignature* rootSignature,
-                                DXGI_FORMAT rtvFormats[4],
-                                DXGI_FORMAT dsvFormat)
+    ID3D12Device* device,
+    ID3D12RootSignature* rootSig,
+    const DXGI_FORMAT rtvFormats[4],
+    DXGI_FORMAT dsvFormat
+)
 {
-    struct Vertex { float pos[3], normal[3], tangent[3], uv[2]; };
+    // read compiled shaders (.cso)
+    auto vs = dx12::ReadFileToBlob(L"shaders/gbuffer_vs.cso");
+    auto ps = dx12::ReadFileToBlob(L"shaders/gbuffer_ps.cso");
 
-    // define vertex data layout
-    static const D3D12_INPUT_ELEMENT_DESC kInputLayout[] = {
-        { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, offsetof(Vertex, pos), D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
-        { "NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, offsetof(Vertex, normal), D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
-        { "TANGENT", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, offsetof(Vertex, tangent), D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
-        { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, offsetof(Vertex, uv), D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 }
+    // input layout: position, normal, tangent, uv
+    D3D12_INPUT_ELEMENT_DESC il[] =
+    {
+        // semantic, index, format, slot, offset, class, step-rate
+        { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT,    0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+        { "NORMAL",   0, DXGI_FORMAT_R32G32B32_FLOAT,    0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+        { "TANGENT",  0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+        { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT,       0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 }
     };
 
-    // put compiled vertex/pixel shaders into binary blobs
-    auto vsBlob = ReadFileToBlob(L"shaders/gbuffer_vs.cso");
-    auto psBlob = ReadFileToBlob(L"shaders/gbuffer_ps.cso");
+    // rasterizer state without d3dx12 helpers
+    D3D12_RASTERIZER_DESC rast{};
+    rast.FillMode = D3D12_FILL_MODE_SOLID;
+    rast.CullMode = D3D12_CULL_MODE_BACK; // cull back faces for right-handed z-up
+    rast.FrontCounterClockwise = FALSE;   // keep default winding
+    rast.DepthBias = D3D12_DEFAULT_DEPTH_BIAS; // 0
+    rast.DepthBiasClamp = 0.0f;
+    rast.SlopeScaledDepthBias = 0.0f;
+    rast.DepthClipEnable = TRUE;          // clip against near/far
+    rast.MultisampleEnable = FALSE;
+    rast.AntialiasedLineEnable = FALSE;
+    rast.ForcedSampleCount = 0;
+    rast.ConservativeRaster = D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF;
 
-    // fill PSO descriptor
-    D3D12_GRAPHICS_PIPELINE_STATE_DESC desc = {};
-    desc.pRootSignature = rootSignature;
-    desc.VS = { vsBlob->GetBufferPointer(), vsBlob->GetBufferSize() };
-    desc.PS = { psBlob->GetBufferPointer(), psBlob->GetBufferSize() };
-    desc.InputLayout = { kInputLayout, _countof(kInputLayout) };
-    desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-    desc.NumRenderTargets = 4; // multiple render targets amount
-    for (UINT i = 0; i < 4; i++)
+    // blend state for 4 mrt, blending disabled
+    D3D12_BLEND_DESC blend{};
+    blend.AlphaToCoverageEnable = FALSE;
+    blend.IndependentBlendEnable = FALSE;
+    for (int i = 0; i < 8; i++)
     {
-        desc.RTVFormats[i] = rtvFormats[i];
+        auto& rt = blend.RenderTarget[i];
+        rt.BlendEnable = FALSE;
+        rt.LogicOpEnable = FALSE;
+        rt.SrcBlend = D3D12_BLEND_ONE;
+        rt.DestBlend = D3D12_BLEND_ZERO;
+        rt.BlendOp = D3D12_BLEND_OP_ADD;
+        rt.SrcBlendAlpha = D3D12_BLEND_ONE;
+        rt.DestBlendAlpha = D3D12_BLEND_ZERO;
+        rt.BlendOpAlpha = D3D12_BLEND_OP_ADD;
+        rt.LogicOp = D3D12_LOGIC_OP_NOOP;
+        rt.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
     }
-    desc.DSVFormat = dsvFormat;
-    desc.SampleDesc.Count = 1;
-    desc.SampleMask = UINT_MAX;
 
-    // disable blending (mixing new color with existing in rtv) for g-buffer write-overs
-    ZeroMemory(&desc.BlendState, sizeof(desc.BlendState));
-    for (int i = 0; i < 4; ++i) {
-        desc.BlendState.RenderTarget[i].BlendEnable = FALSE;
-        desc.BlendState.RenderTarget[i].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL; // to write rgba
-    }
+    // depth-stencil: depth test on, write on, less-equal
+    D3D12_DEPTH_STENCIL_DESC ds{};
+    ds.DepthEnable = TRUE;
+    ds.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+    ds.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+    ds.StencilEnable = FALSE;
+    ds.StencilReadMask  = D3D12_DEFAULT_STENCIL_READ_MASK;   // 0xff
+    ds.StencilWriteMask = D3D12_DEFAULT_STENCIL_WRITE_MASK;  // 0xff
+    ds.FrontFace.StencilFailOp = D3D12_STENCIL_OP_KEEP;
+    ds.FrontFace.StencilDepthFailOp = D3D12_STENCIL_OP_KEEP;
+    ds.FrontFace.StencilPassOp = D3D12_STENCIL_OP_KEEP;
+    ds.FrontFace.StencilFunc = D3D12_COMPARISON_FUNC_ALWAYS;
+    ds.BackFace = ds.FrontFace;
 
-    // depthstencil - mix of z-buffer and mask (pixel counter) to draw if something's drawn there
-    desc.DepthStencilState.DepthEnable = true;
-    desc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
-    desc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+    // fill PSO
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC d{};
+    d.pRootSignature = rootSig;
+    d.InputLayout = { il, _countof(il) };
+    d.VS = { vs->GetBufferPointer(), vs->GetBufferSize() };
+    d.PS = { ps->GetBufferPointer(), ps->GetBufferSize() };
+    d.RasterizerState = rast;
+    d.BlendState = blend;
+    d.DepthStencilState = ds;
+    d.DSVFormat = dsvFormat;
 
-    // rasterizer - builds and filters primitives
-    desc.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID; 
-    desc.RasterizerState.CullMode = D3D12_CULL_MODE_BACK;
-    desc.RasterizerState.FrontCounterClockwise = false;
+    d.SampleMask = UINT_MAX;
+    d.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
 
-    // create PSO
-    HRESULT hr = device->CreateGraphicsPipelineState(&desc, IID_PPV_ARGS(&m_pso));
-    if (FAILED(hr))
+    d.NumRenderTargets = 4;
+    d.RTVFormats[0] = rtvFormats[0];
+    d.RTVFormats[1] = rtvFormats[1];
+    d.RTVFormats[2] = rtvFormats[2];
+    d.RTVFormats[3] = rtvFormats[3];
+
+    d.SampleDesc.Count = 1;
+
+    // create pso
+    if (FAILED(device->CreateGraphicsPipelineState(&d, IID_PPV_ARGS(&m_pso))))
     {
-        throw std::runtime_error("Failed to create GBuffer PSO");
+        throw std::runtime_error("gbuffer pso creation failed");
     }
 }

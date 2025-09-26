@@ -1,72 +1,83 @@
-cbuffer CameraCB   : register(b0) { float4x4 ViewProj; float3 camPos; };
-cbuffer SunCB      : register(b1) { float3 sunDir; float3 sunColor; };
+// minimal deferred lighting: directional lambert (safe sRGB/linear + debug views)
 
-Texture2D G0 : register(t0); // Albedo
-Texture2D G1 : register(t1); // Normal.xy + Rough
-Texture2D G2 : register(t2); // Spec + Emiss.r
-Texture2D G3 : register(t3); // Extra (height or so)
-SamplerState samp: register(s0);
+Texture2D G0 : register(t0); // albedo (stored as UNORM)
+Texture2D G1 : register(t1); // normal.xyz in 0..1 + roughness
+Texture2D G2 : register(t2); // metallic/ao/emissive (unused yet)
+SamplerState S0 : register(s0);
 
-struct PSIn { float4 posSV : SV_POSITION; float2 uv : TEXCOORD0; };
+struct PSIn
+{
+    float4 pos : SV_Position;
+    float2 uv  : TEXCOORD0;
+};
 
-float DistributionGGX(float NdotH, float rough)
+cbuffer CameraCB : register(b0)
 {
-    float a = rough*rough;
-    float a2= a*a;
-    float denom = (NdotH*NdotH)*(a2-1) + 1;
-    return a2 / (3.14159265 * denom*denom);
-}
-float GeometrySchlick(float NdotV, float rough)
+    float4x4 gViewProj; // reserved
+};
+
+cbuffer SunCB : register(b1)
 {
-    float r = (rough+1);
-    float k = (r*r)/8;
-    return NdotV / (NdotV*(1-k)+k);
-}
-float GeometrySmith(float NdotV, float NdotL, float rough)
-{
-    float ggx1 = GeometrySchlick(NdotV, rough);
-    float ggx2 = GeometrySchlick(NdotL, rough);
-    return ggx1 * ggx2;
-}
-float3 FresnelSchlick(float cosTheta, float3 F0)
-{
-    return F0 + (1-F0)*pow(1-cosTheta,5);
+    float3 gSunDirWS;   float gSunIntensity; // note: light travels along -gSunDirWS
+    float3 gSunColor;   float _pad0;
 }
 
-float4 PSMain(PSIn IN) : SV_Target0
+// debug selector: 0=lighting, 1=albedo, 2=normal, 3=ndotl heat
+#ifndef DEBUG_VIEW
+#define DEBUG_VIEW 0
+#endif
+
+// IEC 61966-2-1 piecewise sRGB -> linear (vectorized)
+float3 srgb_to_linear(float3 c)
 {
-    float4  albedo     = G0.Sample(samp, IN.uv);
-    float3  normal_xy  = G1.Sample(samp, IN.uv).xy * 2-1;
-    float   roughness  = G1.Sample(samp, IN.uv).z;
-    float3  specMetal  = G2.Sample(samp, IN.uv).rg;
-    float3  emissive   = G2.Sample(samp, IN.uv).baa; // b->r, a->g etc as you packed
+    c = saturate(c);
+    float3 lo = c / 12.92;
+    float3 hi = pow(max((c + 0.055) / 1.055, 0.0), 2.4);
+    return lerp(lo, hi, step(0.04045, c));
+}
 
-    float3 N = normalize(float3(normal_xy, sqrt(saturate(1 - dot(normal_xy, normal_xy)))));
-    float3 V = normalize(camPos - ( ViewProj[3].xyz )); // approx world pos
-    float3 L = normalize(-sunDir);
-    float3 H = normalize(V + L);
+// linear -> sRGB
+float3 linear_to_srgb(float3 c)
+{
+    c = max(c, 0.0);
+    float3 lo = c * 12.92;
+    float3 hi = 1.055 * pow(max(c, 0.0), 1.0 / 2.4) - 0.055;
+    float3 outc = lerp(lo, hi, step(0.0031308, c));
+    return saturate(outc);
+}
 
-    float NdotL = max(dot(N,L), 0);
-    float NdotV = max(dot(N,V), 0);
-    float NdotH = max(dot(N,H), 0);
-    float VdotH = max(dot(V,H), 0);
+float4 PSMain(PSIn i) : SV_Target
+{
+    // fetch gbuffer
+    float3 a_srgb = G0.Sample(S0, i.uv).rgb;
+    float4 npack  = G1.Sample(S0, i.uv);
 
-    float3 F0 = lerp(float3(0.04,0.04,0.04), albedo.rgb, specMetal.g);
-    float  D  = DistributionGGX(NdotH, roughness);
-    float  G  = GeometrySmith(NdotV, NdotL, roughness);
-    float3 F  = FresnelSchlick(VdotH, F0);
+    // albedo (convert to linear for math)
+    float3 albedo = srgb_to_linear(a_srgb);
 
-    float3 numerator   = D * G * F;
-    float  denom       = 4 * NdotV * NdotL + 0.001;
-    float3 specular    = numerator / denom;
+    // unpack and normalize normal
+    float3 N = normalize(npack.xyz * 2.0 - 1.0);
 
-    float3 kD = (1 - F) * (1 - specMetal.g);
-    float3 diffuse = kD * albedo.rgb / 3.14159265;
+#if DEBUG_VIEW == 1
+    // show albedo (sRGB)
+    return float4(a_srgb, 1);
+#elif DEBUG_VIEW == 2
+    // show normal remapped to 0..1
+    return float4(0.5 * (N + 1.0), 1);
+#elif DEBUG_VIEW == 3
+    // show ndotl heatmap
+    float3 Ld = normalize(-gSunDirWS);
+    float ndotl = saturate(dot(N, Ld));
+    return float4(ndotl, ndotl * 0.5, 0.0, 1);
+#else
+    // lambert
+    float3 Ld = normalize(-gSunDirWS); // light direction (to surface)
+    float ndotl = saturate(dot(N, Ld));
 
-    float3 color = (diffuse + specular) * sunColor * NdotL + emissive;
+    float3 lit_linear = albedo * gSunColor * (gSunIntensity * ndotl);
 
-    // Reinhard tone-mapping
-    color = color / (color + 1);
-
-    return float4(color, albedo.a);
+    // back to sRGB for UNORM backbuffer
+    float3 out_srgb = linear_to_srgb(lit_linear);
+    return float4(out_srgb, 1.0);
+#endif
 }

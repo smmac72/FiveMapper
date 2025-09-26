@@ -1,31 +1,43 @@
+// simple g-buffer vertex shader
+// we use row-major to avoid transposes on cpu
+#pragma pack_matrix(row_major)
+
+struct VSIn
+{
+    float3 pos     : POSITION;
+    float3 normal  : NORMAL;
+    float4 tangent : TANGENT;
+    float2 uv      : TEXCOORD0;
+};
+
+struct VSOut
+{
+    float4 pos     : SV_Position;
+    float3 nrm     : TEXCOORD0;
+    float2 uv      : TEXCOORD1;
+};
+
 cbuffer CameraCB : register(b0)
 {
-    matrix ViewProj;
+    float4x4 gViewProj;
 };
 
-struct VSInput
+cbuffer ObjectCB : register(b1)
 {
-    float3 pos   : POSITION;
-    float3 normal: NORMAL;
-    float3 tangent: TANGENT;
-    float2 uv    : TEXCOORD0;
+    float4x4 gWorld;
 };
 
-struct PSInput
+VSOut VSMain(VSIn v)
 {
-    float4 posSV : SV_POSITION;
-    float3 normal: NORMAL;
-    float3 tangent: TANGENT;
-    float2 uv    : TEXCOORD0;
-};
+    VSOut o;
 
-PSInput VSMain(VSInput IN)
-{
-    PSInput OUT;
-    float4 worldPos = float4(IN.pos, 1.0);
-    OUT.posSV       = mul(worldPos, ViewProj);
-    OUT.normal      = IN.normal;
-    OUT.tangent     = IN.tangent;
-    OUT.uv          = IN.uv;
-    return OUT;
+    float4 wp = mul(float4(v.pos, 1.0), gWorld);
+    o.pos = mul(wp, gViewProj);
+
+    // note: we keep normal in world space for now
+    float3 n = mul(float4(v.normal, 0.0), gWorld).xyz;
+    o.nrm = normalize(n);
+
+    o.uv = v.uv;
+    return o;
 }
