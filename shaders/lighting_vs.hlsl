@@ -1,4 +1,3 @@
-// fullscreen triangle vs
 struct VSOut
 {
     float4 pos : SV_Position;
@@ -7,11 +6,15 @@ struct VSOut
 
 VSOut VSMain(uint vid : SV_VertexID)
 {
-    float2 p[3] = { float2(-1,-1), float2(-1,3), float2(3,-1) };
-    float2 pos = p[vid];
+    float2 pos[3] = {
+        float2(-1.0, -1.0),
+        float2(-1.0,  3.0),
+        float2( 3.0, -1.0)
+    };
 
     VSOut o;
-    o.pos = float4(pos, 0, 1);
-    o.uv  = 0.5 * (pos + 1.0);
+    o.pos = float4(pos[vid], 0.0, 1.0);
+
+    o.uv = 0.5 * (o.pos.xy + float2(1.0, 1.0));
     return o;
 }

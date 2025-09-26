@@ -36,10 +36,12 @@ struct ObjectCB
     XMFLOAT4X4 world;
 };
 
-// lighting camera cb now holds invViewProj
+// lighting camera cb now has invViewProj + camera position (ws)
 struct CameraCBLight
 {
     XMFLOAT4X4 invViewProj;
+    XMFLOAT3   camPosWS;
+    float      _pad;
 };
 
 struct SunCB
@@ -77,7 +79,6 @@ static void CreateUploadBuffer(ID3D12Device* dev, UINT64 size, ID3D12Resource** 
 
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int)
 {
-    // window
     auto cfg = WindowConfig::load();
     Window window(hInstance, cfg);
     if (!window.getHWND())
@@ -90,16 +91,13 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int)
     const uint32_t width = window.getClientWidth();
     const uint32_t height = window.getClientHeight();
 
-    // dx12 base
     dx12::DeviceResources devRes(hwnd, width, height);
     devRes.Initialize(/*enableGpuValidation=*/true);
 
-    // gbuffer offscreen (now with depth SRV)
     dx12::GBufferTargets gbuf;
     dx12::GBufferTargets::Formats fmts{};
     gbuf.Initialize(devRes.GetDevice(), width, height, fmts);
 
-    // geometry rs+pso
     dx12::GBufferRootSignature gRS;
     gRS.Initialize(devRes.GetDevice());
 
@@ -107,21 +105,18 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int)
     DXGI_FORMAT rtvFormats[4] = { fmts.g0, fmts.g1, fmts.g2, fmts.g3 };
     gPSO.Initialize(devRes.GetDevice(), gRS.Get(), rtvFormats, fmts.dsv);
 
-    // lighting rs+pso
     dx12::LightingRootSignature lightRS;
     lightRS.Initialize(devRes.GetDevice());
 
     dx12::LightingPipeline lightPSO;
     lightPSO.Initialize(devRes.GetDevice(), lightRS.Get(), DXGI_FORMAT_R8G8B8A8_UNORM);
 
-    // command objects
     ComPtr<ID3D12CommandAllocator>    cmdAlloc;
     ComPtr<ID3D12GraphicsCommandList> cmdList;
     devRes.GetDevice()->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&cmdAlloc));
     devRes.GetDevice()->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, cmdAlloc.Get(), nullptr, IID_PPV_ARGS(&cmdList));
     cmdList->Close();
 
-    // cube geometry
     Vertex verts[24]{};
     uint16_t idx[36]{};
 
@@ -172,16 +167,13 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int)
     ibv.Format = DXGI_FORMAT_R16_UINT;
     ibv.SizeInBytes = sizeof(idx);
 
-    // const buffers
     const UINT kCBAlign = 256u;
 
-    // geometry: b0 camera, b1 object
     ComPtr<ID3D12Resource> cbGeom;
     CreateUploadBuffer(devRes.GetDevice(), kCBAlign * 2, &cbGeom);
     uint8_t* cbGeomBase = nullptr;
     cbGeom->Map(0, nullptr, reinterpret_cast<void**>(&cbGeomBase));
 
-    // lighting: b0 camera(invViewProj), b1 sun
     ComPtr<ID3D12Resource> cbLight;
     CreateUploadBuffer(devRes.GetDevice(), kCBAlign * 2, &cbLight);
     uint8_t* cbLightBase = nullptr;
@@ -193,8 +185,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int)
     {
         devRes.WaitForPreviousFrame();
 
-        // camera/object and lighting cb update
         XMMATRIX view, proj, viewProj, invViewProj;
+        XMFLOAT3 camPos;
         {
             XMVECTOR eye = XMVectorSet(0.0f, -3.0f, 1.0f, 1.0f);
             XMVECTOR at  = XMVectorSet(0.0f,  0.0f, 1.0f, 1.0f);
@@ -205,6 +197,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int)
             proj = XMMatrixPerspectiveFovRH(XMConvertToRadians(60.0f), aspect, 0.1f, 100.0f);
             viewProj = view * proj;
             invViewProj = XMMatrixInverse(nullptr, viewProj);
+
+            XMStoreFloat3(&camPos, eye);
 
             CameraCBGeom cam{};
             XMStoreFloat4x4(&cam.viewProj, viewProj);
@@ -217,6 +211,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int)
 
             CameraCBLight camL{};
             XMStoreFloat4x4(&camL.invViewProj, invViewProj);
+            camL.camPosWS = camPos;
 
             SunCB sun{};
             XMVECTOR ldir = XMVector3Normalize(XMVectorSet(+0.3f, +0.8f, +0.5f, 0.0f));
@@ -231,7 +226,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int)
         cmdAlloc->Reset();
         cmdList->Reset(cmdAlloc.Get(), nullptr);
 
-        // gbuffer color: PS_RESOURCE/COMMON -> RENDER_TARGET
+        // color gbuffer: PS_RESOURCE/COMMON -> RENDER_TARGET
         {
             D3D12_RESOURCE_BARRIER b[4]{};
             for (int i = 0; i < 4; i++)
@@ -262,7 +257,6 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int)
             cmdList->ResourceBarrier(1, &b);
         }
 
-        // bind mrt + dsv and clear
         D3D12_CPU_DESCRIPTOR_HANDLE mrt[4] =
         {
             gbuf.GetRTV(0), gbuf.GetRTV(1), gbuf.GetRTV(2), gbuf.GetRTV(3)
@@ -278,7 +272,6 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int)
         }
         cmdList->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
 
-        // viewport/scissor
         D3D12_VIEWPORT vp{};
         vp.TopLeftX = 0.0f;
         vp.TopLeftY = 0.0f;
@@ -293,12 +286,12 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int)
         cmdList->RSSetViewports(1, &vp);
         cmdList->RSSetScissorRects(1, &sc);
 
-        // geometry draw
+        // geometry
         cmdList->SetGraphicsRootSignature(gRS.Get());
         cmdList->SetPipelineState(gPSO.GetPSO());
 
-        D3D12_GPU_VIRTUAL_ADDRESS camAddr = cbGeom->GetGPUVirtualAddress() + 0 * kCBAlign;
-        D3D12_GPU_VIRTUAL_ADDRESS objAddr = cbGeom->GetGPUVirtualAddress() + 1 * kCBAlign;
+        D3D12_GPU_VIRTUAL_ADDRESS camAddr = cbGeom->GetGPUVirtualAddress() + 0 * 256u;
+        D3D12_GPU_VIRTUAL_ADDRESS objAddr = cbGeom->GetGPUVirtualAddress() + 1 * 256u;
         cmdList->SetGraphicsRootConstantBufferView(0, camAddr);
         cmdList->SetGraphicsRootConstantBufferView(1, objAddr);
 
@@ -347,13 +340,12 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int)
             cmdList->ResourceBarrier(1, &bb);
         }
 
-        // clear backbuffer
         D3D12_CPU_DESCRIPTOR_HANDLE bbRtv = devRes.GetCurrentRTV();
         const float clear[4] = { 0.05f, 0.05f, 0.06f, 1.0f };
         cmdList->OMSetRenderTargets(1, &bbRtv, FALSE, nullptr);
         cmdList->ClearRenderTargetView(bbRtv, clear, 0, nullptr);
 
-        // lighting: bind srv heap (g0..g3, depth at t4)
+        // lighting (pbr)
         {
             ID3D12DescriptorHeap* heaps[] = { gbuf.GetSrvHeap() };
             cmdList->SetDescriptorHeaps(1, heaps);
@@ -361,8 +353,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int)
             cmdList->SetGraphicsRootSignature(lightRS.Get());
             cmdList->SetPipelineState(lightPSO.GetPSO());
 
-            D3D12_GPU_VIRTUAL_ADDRESS camL = cbLight->GetGPUVirtualAddress() + 0 * kCBAlign;
-            D3D12_GPU_VIRTUAL_ADDRESS sunL = cbLight->GetGPUVirtualAddress() + 1 * kCBAlign;
+            D3D12_GPU_VIRTUAL_ADDRESS camL = cbLight->GetGPUVirtualAddress() + 0 * 256u;
+            D3D12_GPU_VIRTUAL_ADDRESS sunL = cbLight->GetGPUVirtualAddress() + 1 * 256u;
             cmdList->SetGraphicsRootConstantBufferView(0, camL);
             cmdList->SetGraphicsRootConstantBufferView(1, sunL);
 
@@ -374,7 +366,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int)
             cmdList->DrawInstanced(3, 1, 0, 0);
         }
 
-        // backbuffer render target -> present
+        // present
         {
             D3D12_RESOURCE_BARRIER bb{};
             bb.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
