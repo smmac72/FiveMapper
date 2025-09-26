@@ -6,11 +6,11 @@ using namespace dx12;
 
 void LightingRootSignature::Initialize(ID3D12Device* device)
 {
-    // descriptor table for gbuffer srvs: t0..t3
+    // descriptor table for gbuffer srvs: t0..t4 (g0..g3, depth)
     D3D12_DESCRIPTOR_RANGE1 range{};
     range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    range.NumDescriptors = 4;
-    range.BaseShaderRegister = 0; // t0
+    range.NumDescriptors = 5;           // was 4
+    range.BaseShaderRegister = 0;       // t0
     range.RegisterSpace = 0;
     range.Flags = D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC;
     range.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;

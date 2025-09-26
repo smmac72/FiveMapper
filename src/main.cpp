@@ -18,7 +18,6 @@
 using Microsoft::WRL::ComPtr;
 using namespace DirectX;
 
-// simple vertex layout for the test cube
 struct Vertex
 {
     XMFLOAT3 pos;
@@ -27,8 +26,7 @@ struct Vertex
     XMFLOAT2 uv;
 };
 
-// constant buffers
-struct CameraCB
+struct CameraCBGeom
 {
     XMFLOAT4X4 viewProj;
 };
@@ -38,13 +36,18 @@ struct ObjectCB
     XMFLOAT4X4 world;
 };
 
+// lighting camera cb now holds invViewProj
+struct CameraCBLight
+{
+    XMFLOAT4X4 invViewProj;
+};
+
 struct SunCB
 {
     XMFLOAT3 dirWS;  float intensity;
     XMFLOAT3 color;  float _pad0;
 };
 
-// helper to create an upload buffer we can map directly
 static void CreateUploadBuffer(ID3D12Device* dev, UINT64 size, ID3D12Resource** out)
 {
     D3D12_HEAP_PROPERTIES heap{};
@@ -74,7 +77,7 @@ static void CreateUploadBuffer(ID3D12Device* dev, UINT64 size, ID3D12Resource** 
 
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int)
 {
-    // load window config and create window
+    // window
     auto cfg = WindowConfig::load();
     Window window(hInstance, cfg);
     if (!window.getHWND())
@@ -87,16 +90,16 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int)
     const uint32_t width = window.getClientWidth();
     const uint32_t height = window.getClientHeight();
 
-    // init dx12 device/swapchain/rtv etc
+    // dx12 base
     dx12::DeviceResources devRes(hwnd, width, height);
     devRes.Initialize(/*enableGpuValidation=*/true);
 
-    // create g-buffer targets (offscreen)
+    // gbuffer offscreen (now with depth SRV)
     dx12::GBufferTargets gbuf;
     dx12::GBufferTargets::Formats fmts{};
     gbuf.Initialize(devRes.GetDevice(), width, height, fmts);
 
-    // g-buffer root signature + pso
+    // geometry rs+pso
     dx12::GBufferRootSignature gRS;
     gRS.Initialize(devRes.GetDevice());
 
@@ -104,7 +107,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int)
     DXGI_FORMAT rtvFormats[4] = { fmts.g0, fmts.g1, fmts.g2, fmts.g3 };
     gPSO.Initialize(devRes.GetDevice(), gRS.Get(), rtvFormats, fmts.dsv);
 
-    // lighting root signature + pso (fullscreen triangle)
+    // lighting rs+pso
     dx12::LightingRootSignature lightRS;
     lightRS.Initialize(devRes.GetDevice());
 
@@ -118,14 +121,13 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int)
     devRes.GetDevice()->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, cmdAlloc.Get(), nullptr, IID_PPV_ARGS(&cmdList));
     cmdList->Close();
 
-    // build a unit cube (z-up, right-handed), 24 verts (4 per face), 36 indices
+    // cube geometry
     Vertex verts[24]{};
     uint16_t idx[36]{};
 
     auto setFace =
         [&](int vbase, int ibase, XMFLOAT3 n, XMFLOAT4 t, XMFLOAT3 p0, XMFLOAT3 p1, XMFLOAT3 p2, XMFLOAT3 p3)
     {
-        // rectangle as two triangles: 0-1-2 and 0-2-3
         verts[vbase + 0] = { p0, n, t, {0,0} };
         verts[vbase + 1] = { p1, n, t, {1,0} };
         verts[vbase + 2] = { p2, n, t, {1,1} };
@@ -140,27 +142,13 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int)
     };
 
     const float s = 0.5f;
+    setFace(0, 0, {0,1,0}, {1,0,0,1}, {-s, s,-s}, { s, s,-s}, { s, s, s}, {-s, s, s});
+    setFace(4, 6, {0,-1,0}, {-1,0,0,1}, {-s,-s, s}, { s,-s, s}, { s,-s,-s}, {-s,-s,-s});
+    setFace(8, 12, {1,0,0}, {0,1,0,1}, { s,-s,-s}, { s,-s, s}, { s, s, s}, { s, s,-s});
+    setFace(12, 18, {-1,0,0}, {0,-1,0,1}, {-s,-s, s}, {-s,-s,-s}, {-s, s,-s}, {-s, s, s});
+    setFace(16, 24, {0,0,1}, {1,0,0,1}, {-s,-s, s}, { s,-s, s}, { s, s, s}, {-s, s, s});
+    setFace(20, 30, {0,0,-1}, {1,0,0,1}, {-s, s,-s}, { s, s,-s}, { s,-s,-s}, {-s,-s,-s});
 
-    // +Y front (normal +Y)
-    setFace(0, 0, {0,1,0}, {1,0,0,1},
-        {-s, s, -s}, { s, s, -s}, { s, s, s}, {-s, s, s});
-    // -Y back
-    setFace(4, 6, {0,-1,0}, {-1,0,0,1},
-        {-s,-s, s}, { s,-s, s}, { s,-s,-s}, {-s,-s,-s});
-    // +X right
-    setFace(8, 12, {1,0,0}, {0,1,0,1},
-        { s,-s,-s}, { s,-s, s}, { s, s, s}, { s, s,-s});
-    // -X left
-    setFace(12, 18, {-1,0,0}, {0,-1,0,1},
-        {-s,-s, s}, {-s,-s,-s}, {-s, s,-s}, {-s, s, s});
-    // +Z up (z-up world)
-    setFace(16, 24, {0,0,1}, {1,0,0,1},
-        {-s,-s, s}, { s,-s, s}, { s, s, s}, {-s, s, s});
-    // -Z down
-    setFace(20, 30, {0,0,-1}, {1,0,0,1},
-        {-s, s,-s}, { s, s,-s}, { s,-s,-s}, {-s,-s,-s});
-
-    // create VB/IB in upload memory
     ComPtr<ID3D12Resource> vb, ib;
     CreateUploadBuffer(devRes.GetDevice(), sizeof(verts), &vb);
     CreateUploadBuffer(devRes.GetDevice(), sizeof(idx),   &ib);
@@ -184,16 +172,16 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int)
     ibv.Format = DXGI_FORMAT_R16_UINT;
     ibv.SizeInBytes = sizeof(idx);
 
-    // constant buffers
+    // const buffers
     const UINT kCBAlign = 256u;
 
-    // geometry pass cb: b0 camera, b1 object
+    // geometry: b0 camera, b1 object
     ComPtr<ID3D12Resource> cbGeom;
     CreateUploadBuffer(devRes.GetDevice(), kCBAlign * 2, &cbGeom);
     uint8_t* cbGeomBase = nullptr;
     cbGeom->Map(0, nullptr, reinterpret_cast<void**>(&cbGeomBase));
 
-    // lighting pass cb: b0 camera (reserved), b1 sun
+    // lighting: b0 camera(invViewProj), b1 sun
     ComPtr<ID3D12Resource> cbLight;
     CreateUploadBuffer(devRes.GetDevice(), kCBAlign * 2, &cbLight);
     uint8_t* cbLightBase = nullptr;
@@ -201,49 +189,49 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int)
 
     bool firstFrame = true;
 
-    // main loop
     while (window.processMessages())
     {
-        // wait until the previous frame work is done
         devRes.WaitForPreviousFrame();
 
-        // update camera and object cb for geometry
+        // camera/object and lighting cb update
+        XMMATRIX view, proj, viewProj, invViewProj;
         {
-            // build a simple camera: eye at (0, -3, 1), looking to +Y, z-up
             XMVECTOR eye = XMVectorSet(0.0f, -3.0f, 1.0f, 1.0f);
             XMVECTOR at  = XMVectorSet(0.0f,  0.0f, 1.0f, 1.0f);
             XMVECTOR up  = XMVectorSet(0.0f,  0.0f, 1.0f, 0.0f);
 
             float aspect = float(width) / float(height);
-            XMMATRIX view = XMMatrixLookAtRH(eye, at, up);
-            XMMATRIX proj = XMMatrixPerspectiveFovRH(XMConvertToRadians(60.0f), aspect, 0.1f, 100.0f);
-            XMMATRIX viewProj = view * proj;
+            view = XMMatrixLookAtRH(eye, at, up);
+            proj = XMMatrixPerspectiveFovRH(XMConvertToRadians(60.0f), aspect, 0.1f, 100.0f);
+            viewProj = view * proj;
+            invViewProj = XMMatrixInverse(nullptr, viewProj);
 
-            CameraCB cam{};
+            CameraCBGeom cam{};
             XMStoreFloat4x4(&cam.viewProj, viewProj);
 
             ObjectCB obj{};
             XMStoreFloat4x4(&obj.world, XMMatrixIdentity());
 
-            std::memcpy(cbGeomBase + 0 * kCBAlign, &cam, sizeof(CameraCB));
+            std::memcpy(cbGeomBase + 0 * kCBAlign, &cam, sizeof(CameraCBGeom));
             std::memcpy(cbGeomBase + 1 * kCBAlign, &obj, sizeof(ObjectCB));
 
-            // lighting cb: camera reserved for future pbr, sun params used now
+            CameraCBLight camL{};
+            XMStoreFloat4x4(&camL.invViewProj, invViewProj);
+
             SunCB sun{};
             XMVECTOR ldir = XMVector3Normalize(XMVectorSet(+0.3f, +0.8f, +0.5f, 0.0f));
             XMStoreFloat3(&sun.dirWS, ldir);
-            sun.intensity = 2.0f;
-            sun.color = { 1.0f, 0.95f, 0.9f };
+            sun.intensity = 3.0f;
+            sun.color = { 1.0f, 1.0f, 1.0f };
 
-            std::memcpy(cbLightBase + 0 * kCBAlign, &cam, sizeof(CameraCB));
+            std::memcpy(cbLightBase + 0 * kCBAlign, &camL, sizeof(CameraCBLight));
             std::memcpy(cbLightBase + 1 * kCBAlign, &sun, sizeof(SunCB));
         }
 
-        // record commands
         cmdAlloc->Reset();
         cmdList->Reset(cmdAlloc.Get(), nullptr);
 
-        // transition gbuffer to render target for geometry pass
+        // gbuffer color: PS_RESOURCE/COMMON -> RENDER_TARGET
         {
             D3D12_RESOURCE_BARRIER b[4]{};
             for (int i = 0; i < 4; i++)
@@ -255,12 +243,26 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int)
                 b[i].Transition.StateBefore = firstFrame
                     ? D3D12_RESOURCE_STATE_COMMON
                     : D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-                b[i].Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
+                b[i].Transition.StateAfter  = D3D12_RESOURCE_STATE_RENDER_TARGET;
             }
             cmdList->ResourceBarrier(4, b);
         }
 
-        // bind gbuffer mrt + dsv and clear
+        // depth: COMMON/PS_RESOURCE -> DEPTH_WRITE
+        {
+            D3D12_RESOURCE_BARRIER b{};
+            b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            b.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+            b.Transition.pResource = gbuf.GetDepth();
+            b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            b.Transition.StateBefore = firstFrame
+                ? D3D12_RESOURCE_STATE_COMMON
+                : D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+            b.Transition.StateAfter  = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+            cmdList->ResourceBarrier(1, &b);
+        }
+
+        // bind mrt + dsv and clear
         D3D12_CPU_DESCRIPTOR_HANDLE mrt[4] =
         {
             gbuf.GetRTV(0), gbuf.GetRTV(1), gbuf.GetRTV(2), gbuf.GetRTV(3)
@@ -276,7 +278,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int)
         }
         cmdList->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
 
-        // viewport and scissor for offscreen
+        // viewport/scissor
         D3D12_VIEWPORT vp{};
         vp.TopLeftX = 0.0f;
         vp.TopLeftY = 0.0f;
@@ -291,7 +293,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int)
         cmdList->RSSetViewports(1, &vp);
         cmdList->RSSetScissorRects(1, &sc);
 
-        // draw cube into gbuffer
+        // geometry draw
         cmdList->SetGraphicsRootSignature(gRS.Get());
         cmdList->SetPipelineState(gPSO.GetPSO());
 
@@ -305,7 +307,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int)
         cmdList->IASetIndexBuffer(&ibv);
         cmdList->DrawIndexedInstanced(36, 1, 0, 0, 0);
 
-        // transition gbuffer to ps-resource for lighting pass
+        // color gbuffer: RENDER_TARGET -> PS_RESOURCE
         {
             D3D12_RESOURCE_BARRIER b[4]{};
             for (int i = 0; i < 4; i++)
@@ -318,6 +320,18 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int)
                 b[i].Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
             }
             cmdList->ResourceBarrier(4, b);
+        }
+
+        // depth: DEPTH_WRITE -> PS_RESOURCE
+        {
+            D3D12_RESOURCE_BARRIER b{};
+            b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            b.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+            b.Transition.pResource = gbuf.GetDepth();
+            b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            b.Transition.StateBefore = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+            b.Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+            cmdList->ResourceBarrier(1, &b);
         }
 
         firstFrame = false;
@@ -333,13 +347,13 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int)
             cmdList->ResourceBarrier(1, &bb);
         }
 
-        // clear backbuffer (this will be fully overwritten by lighting pass)
+        // clear backbuffer
         D3D12_CPU_DESCRIPTOR_HANDLE bbRtv = devRes.GetCurrentRTV();
         const float clear[4] = { 0.05f, 0.05f, 0.06f, 1.0f };
         cmdList->OMSetRenderTargets(1, &bbRtv, FALSE, nullptr);
         cmdList->ClearRenderTargetView(bbRtv, clear, 0, nullptr);
 
-        // lighting pass: bind srv heap and draw fullscreen triangle
+        // lighting: bind srv heap (g0..g3, depth at t4)
         {
             ID3D12DescriptorHeap* heaps[] = { gbuf.GetSrvHeap() };
             cmdList->SetDescriptorHeaps(1, heaps);
@@ -352,13 +366,10 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int)
             cmdList->SetGraphicsRootConstantBufferView(0, camL);
             cmdList->SetGraphicsRootConstantBufferView(1, sunL);
 
-            // gbuffer srvs start at t0
             cmdList->SetGraphicsRootDescriptorTable(2, gbuf.GetSrvTableGPUStart());
 
-            // make sure viewport covers backbuffer
             cmdList->RSSetViewports(1, &vp);
             cmdList->RSSetScissorRects(1, &sc);
-
             cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             cmdList->DrawInstanced(3, 1, 0, 0);
         }
@@ -374,7 +385,6 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int)
             cmdList->ResourceBarrier(1, &bb);
         }
 
-        // submit and present (vsync on)
         cmdList->Close();
         ID3D12CommandList* lists[] = { cmdList.Get() };
         devRes.GetDirectQueue()->ExecuteCommandLists(1, lists);
