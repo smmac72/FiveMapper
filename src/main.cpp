@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstring>
 #include <cstdio>
+#include <string>
 
 #include "platform/Window.h"
 #include "dx12/DeviceResources.h"
@@ -20,6 +21,10 @@
 #include "dx12/ShadowRootSignature.h"
 #include "dx12/ShadowPipeline.h"
 
+#include "assets/Mesh.h"
+#include "assets/Material.h"
+#include "assets/TextureLoader.h"
+
 using Microsoft::WRL::ComPtr;
 using namespace DirectX;
 
@@ -29,7 +34,6 @@ struct Vertex { XMFLOAT3 pos; XMFLOAT3 nrm; XMFLOAT4 tan; XMFLOAT2 uv; };
 struct CameraCBGeom { XMFLOAT4X4 viewProj; };
 struct ObjectCB { XMFLOAT4X4 world; };
 
-// lighting camera cb: inv proj + inv view + camera position
 struct CameraCBLight
 {
     XMFLOAT4X4 invProj;
@@ -75,7 +79,7 @@ struct HiTimer
 
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int)
 {
-    // window and config
+    // window
     auto cfg = WindowConfig::load();
     Window window(hInstance, cfg);
     if (!window.getHWND())
@@ -116,9 +120,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int)
     dx12::ShadowRootSignature shRS; shRS.Initialize(devRes.GetDevice());
     dx12::ShadowPipeline shPSO; shPSO.Initialize(devRes.GetDevice(), shRS.Get(), DXGI_FORMAT_D32_FLOAT);
 
-    // per-frame command allocators + list
+    // per-frame allocators + shared command list
     ComPtr<ID3D12CommandAllocator> cmdAlloc[dx12::DeviceResources::kFrameCount];
-    for (UINT i = 0; i < dx12::DeviceResources::kFrameCount; ++i)
+    for (UINT i = 0; i < dx12::DeviceResources::kFrameCount; i)
         if (FAILED(devRes.GetDevice()->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&cmdAlloc[i]))))
             throw std::runtime_error("createcommandallocator failed");
 
@@ -130,44 +134,49 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int)
             throw std::runtime_error("createcommandlist failed");
         cmdList->Close();
     }
-    bool listOpen = false;
 
-    // simple unit cube
-    Vertex verts[24]{}; uint16_t idx[36]{};
-    auto setFace = [&](int v, int ib, XMFLOAT3 n, XMFLOAT4 t,
-                       XMFLOAT3 p0, XMFLOAT3 p1, XMFLOAT3 p2, XMFLOAT3 p3)
+    // assets
+    assets::Mesh mesh;
+    assets::Material mat;
+
+    // ----- upload phase: record uploads for mesh/material, execute, and wait -----
     {
-        // note: winding here is ccw in screen space for the chosen face orientation
-        verts[v + 0] = { p0, n, t, {0,0} };
-        verts[v + 1] = { p1, n, t, {1,0} };
-        verts[v + 2] = { p2, n, t, {1,1} };
-        verts[v + 3] = { p3, n, t, {0,1} };
-        idx[ib + 0] = uint16_t(v + 0);
-        idx[ib + 1] = uint16_t(v + 1);
-        idx[ib + 2] = uint16_t(v + 2);
-        idx[ib + 3] = uint16_t(v + 0);
-        idx[ib + 4] = uint16_t(v + 2);
-        idx[ib + 5] = uint16_t(v + 3);
-    };
-    const float s = 0.5f;
-    setFace(0, 0,   {0, 1, 0},  {1,0,0,1}, {-s, s,-s}, { s, s,-s}, { s, s, s}, {-s, s, s});
-    setFace(4, 6,   {0,-1, 0}, {-1,0,0,1}, {-s,-s, s}, { s,-s, s}, { s,-s,-s}, {-s,-s,-s});
-    setFace(8, 12,  {1, 0, 0},  {0,1,0,1}, { s,-s,-s}, { s,-s, s}, { s, s, s}, { s, s,-s});
-    setFace(12, 18, {-1,0, 0},  {0,-1,0,1},{-s,-s, s}, {-s,-s,-s}, {-s, s,-s}, {-s, s, s});
-    setFace(16, 24, {0, 0, 1},  {1,0,0,1}, {-s,-s, s}, { s,-s, s}, { s, s, s}, {-s, s, s});
-    setFace(20, 30, {0, 0,-1},  {1,0,0,1}, {-s, s,-s}, { s, s,-s}, { s,-s,-s}, {-s,-s,-s});
+        UINT fi = devRes.GetFrameIndex();
+        cmdAlloc[fi]->Reset();
+        cmdList->Reset(cmdAlloc[fi].Get(), nullptr);
 
-    ComPtr<ID3D12Resource> vb, ib;
-    CreateUploadBuffer(devRes.GetDevice(), sizeof(verts), &vb);
-    CreateUploadBuffer(devRes.GetDevice(), sizeof(idx),   &ib);
-    void* p = nullptr;
-    vb->Map(0, nullptr, &p); std::memcpy(p, verts, sizeof(verts)); vb->Unmap(0, nullptr);
-    ib->Map(0, nullptr, &p); std::memcpy(p, idx,   sizeof(idx));   ib->Unmap(0, nullptr);
+        // load mesh and create gpu buffers (does upload + transitions inside)
+        if (!mesh.LoadFromFile("assets/cube.obj"))
+            throw std::runtime_error("failed to load mesh");
+        mesh.CreateBuffers(devRes.GetDevice(), cmdList.Get());
 
-    D3D12_VERTEX_BUFFER_VIEW vbv{ vb->GetGPUVirtualAddress(), UINT(sizeof(verts)), UINT(sizeof(Vertex)) };
-    D3D12_INDEX_BUFFER_VIEW  ibv{ ib->GetGPUVirtualAddress(), UINT(sizeof(idx)),   DXGI_FORMAT_R16_UINT };
+        // init material (creates fallback 1x1 textures and uploads them)
+        mat.Initialize(devRes.GetDevice(), cmdList.Get());
 
-    // constant buffers (256 aligned)
+        // optional: load real textures here; they will be uploaded on this same list
+        // keep albedo as example; others can be added once files exist
+        // mat.LoadSlot(devRes.GetDevice(), cmdList.Get(), assets::Material::Albedo, L"assets/albedo.jpg", true);
+        // mat.LoadSlot(devRes.GetDevice(), cmdList.Get(), assets::Material::Normal, L"assets/normal.jpg", false);
+        // mat.LoadSlot(devRes.GetDevice(), cmdList.Get(), assets::Material::ORM,    L"assets/orm.jpg",    false);
+        // mat.LoadSlot(devRes.GetDevice(), cmdList.Get(), assets::Material::Emissive, L"assets/emissive.png", false);
+
+        // close + execute + wait so resources end in pixel_shader_resource before first draw
+        cmdList->Close();
+        ID3D12CommandList* lists[] = { cmdList.Get() };
+        devRes.GetDirectQueue()->ExecuteCommandLists(1, lists);
+        devRes.WaitForGpu();
+    }
+
+    // now we can render; create a fresh list each frame
+    bool listOpen = false;
+    {
+        UINT fi = devRes.GetFrameIndex();
+        cmdAlloc[fi]->Reset();
+        cmdList->Reset(cmdAlloc[fi].Get(), nullptr);
+        listOpen = true;
+    }
+
+    // cbuffers
     const UINT CB = 256;
     ComPtr<ID3D12Resource> cbGeom;   CreateUploadBuffer(devRes.GetDevice(), CB * 2, &cbGeom);
     ComPtr<ID3D12Resource> cbLight;  CreateUploadBuffer(devRes.GetDevice(), CB * 2, &cbLight);
@@ -177,9 +186,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int)
     uint8_t* cbLightBase=nullptr;  cbLight->Map(0,nullptr,(void**)&cbLightBase);
     uint8_t* cbShadowBase=nullptr; cbShadow->Map(0,nullptr,(void**)&cbShadowBase);
 
-    // camera state (z-up)
+    // camera state
     XMFLOAT3 camPos = { 0.0f, -3.0f, 1.0f };
-    float yaw   = XM_PIDIV2; // look toward +y
+    float yaw   = XM_PIDIV2;
     float pitch = 0.0f;
     const float mouseSens = 0.0025f;
     const float moveSpeed = 2.0f;
@@ -240,7 +249,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int)
         if (curW == 0) curW = 1;
         if (curH == 0) curH = 1;
 
-        // camera matrices (right-handed, z-up)
+        // camera matrices
         XMVECTOR eye = XMVectorSet(camPos.x, camPos.y, camPos.z, 1.0f);
         XMVECTOR at  = XMVectorAdd(eye, fwd);
         XMMATRIX view = XMMatrixLookAtRH(eye, at, up);
@@ -259,7 +268,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int)
         CameraCBGeom camG{}; XMStoreFloat4x4(&camG.viewProj, viewProj);
         std::memcpy(cbGeomBase + 0 * CB, &camG, sizeof(camG));
 
-        // sun and lighting cb
+        // sun/light params
         SunCB sun{};
         XMVECTOR ldir = XMVector3Normalize(XMVectorSet(+0.3f, +0.8f, +0.5f, 0.0f));
         XMStoreFloat3(&sun.dirWS, ldir);
@@ -298,7 +307,6 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int)
             cmdList->ResourceBarrier(1, &b);
         }
         {
-            // match viewport/scissor to shadow map resolution
             D3D12_VIEWPORT vp{ 0, 0, float(shadowSize), float(shadowSize), 0, 1 };
             D3D12_RECT     sc{ 0, 0, LONG(shadowSize),  LONG(shadowSize)  };
             cmdList->RSSetViewports(1, &vp);
@@ -314,9 +322,13 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int)
         cmdList->SetGraphicsRootConstantBufferView(0, cbShadow->GetGPUVirtualAddress() + 0 * CB);
         cmdList->SetGraphicsRootConstantBufferView(1, cbGeom->GetGPUVirtualAddress()   + 1 * CB);
         cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        cmdList->IASetVertexBuffers(0, 1, &vbv);
-        cmdList->IASetIndexBuffer(&ibv);
-        cmdList->DrawIndexedInstanced(36, 1, 0, 0, 0);
+        {
+            auto vbv = mesh.GetVBV();
+            auto ibv = mesh.GetIBV();
+            cmdList->IASetVertexBuffers(0, 1, &vbv);
+            cmdList->IASetIndexBuffer(&ibv);
+            cmdList->DrawIndexedInstanced(mesh.GetIndexCount(), 1, 0, 0, 0);
+        }
         {
             D3D12_RESOURCE_BARRIER b{};
             b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -365,14 +377,25 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int)
             cmdList->RSSetViewports(1, &vp);
             cmdList->RSSetScissorRects(1, &sc);
         }
+        // bind material heap for geometry
+        {
+            ID3D12DescriptorHeap* heaps[] = { mat.GetSrvHeap() };
+            cmdList->SetDescriptorHeaps(1, heaps);
+        }
         cmdList->SetGraphicsRootSignature(gRS.Get());
         cmdList->SetPipelineState(gPSO.GetPSO());
         cmdList->SetGraphicsRootConstantBufferView(0, cbGeom->GetGPUVirtualAddress() + 0 * CB);
         cmdList->SetGraphicsRootConstantBufferView(1, cbGeom->GetGPUVirtualAddress() + 1 * CB);
+        cmdList->SetGraphicsRootDescriptorTable(2, mat.GetTableStart());
+
         cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        cmdList->IASetVertexBuffers(0, 1, &vbv);
-        cmdList->IASetIndexBuffer(&ibv);
-        cmdList->DrawIndexedInstanced(36, 1, 0, 0, 0);
+        {
+            auto vbv = mesh.GetVBV();
+            auto ibv = mesh.GetIBV();
+            cmdList->IASetVertexBuffers(0, 1, &vbv);
+            cmdList->IASetIndexBuffer(&ibv);
+            cmdList->DrawIndexedInstanced(mesh.GetIndexCount(), 1, 0, 0, 0);
+        }
         {
             D3D12_RESOURCE_BARRIER b[4]{};
             for (int i = 0; i < 4; i++)
@@ -397,7 +420,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int)
 
         firstFrame = false;
 
-        // lighting to backbuffer
+        // lighting pass to backbuffer
         {
             D3D12_RESOURCE_BARRIER bb{};
             bb.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -414,14 +437,10 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int)
         cmdList->ClearRenderTargetView(bbRtv, clear, 0, nullptr);
 
         {
-            D3D12_VIEWPORT vp{ 0, 0, float(curW), float(curH), 0, 1 };
-            D3D12_RECT     sc{ 0, 0, LONG(curW), LONG(curH) };
-            cmdList->RSSetViewports(1, &vp);
-            cmdList->RSSetScissorRects(1, &sc);
+            // switch heap to gbuffer heap (t0..t5)
+            ID3D12DescriptorHeap* heaps[] = { gbuf.GetSrvHeap() };
+            cmdList->SetDescriptorHeaps(1, heaps);
         }
-
-        ID3D12DescriptorHeap* heaps[] = { gbuf.GetSrvHeap() };
-        cmdList->SetDescriptorHeaps(1, heaps);
         cmdList->SetGraphicsRootSignature(lightRS.Get());
         cmdList->SetPipelineState(lightPSO.GetPSO());
         cmdList->SetGraphicsRootConstantBufferView(0, cbLight->GetGPUVirtualAddress() + 0 * CB);
@@ -440,9 +459,10 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int)
             cmdList->ResourceBarrier(1, &bb);
         }
 
+        // submit
         cmdList->Close(); listOpen = false;
-        ID3D12CommandList* lists[] = { cmdList.Get() };
-        devRes.GetDirectQueue()->ExecuteCommandLists(1, lists);
+        ID3D12CommandList* lists2[] = { cmdList.Get() };
+        devRes.GetDirectQueue()->ExecuteCommandLists(1, lists2);
         devRes.GetSwapChain()->Present(1, 0);
         devRes.EndFrame();
     }

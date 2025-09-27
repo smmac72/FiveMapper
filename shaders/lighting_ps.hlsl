@@ -1,4 +1,4 @@
-// lighting pixel shader: pbr + single shadow map (manual pcf 3x3), directional light
+// lighting pixel shader: pbr + single shadow map (hardware pcf), directional light
 
 Texture2D G0      : register(t0);
 Texture2D G1      : register(t1);
@@ -7,9 +7,7 @@ Texture2D G3      : register(t3);
 Texture2D GDepth  : register(t4);
 Texture2D<float> ShadowMap : register(t5);
 
-// s0 is reserved for linear sampling (materials/post); g-buffer uses point
 SamplerState            S0       : register(s0);
-SamplerState            SPoint   : register(s1);
 SamplerComparisonState  SShadow  : register(s2);
 
 struct PSIn
@@ -20,10 +18,7 @@ struct PSIn
 
 cbuffer CameraCB : register(b0)
 {
-    // correct world position reconstruction: ndc -> invProj -> /w -> invView
-    row_major float4x4 gInvProj;
-    row_major float4x4 gInvView;
-
+    row_major float4x4 gInvViewProj;
     float3 gCamPosWS; float _padCam;
 };
 
@@ -34,14 +29,15 @@ cbuffer SunCB : register(b1)
 
     row_major float4x4 gLightViewProj;
     float2 gShadowTexelSize; // 1/width, 1/height
-    float  gShadowBias;      // base bias ~0.001..0.003
+    float  gShadowBias;      // base depth bias in light space depth units
     float  gShadowStrength;  // 0..1
 };
 
-// debug view bitmask (set via compile-time define if needed)
 #ifndef DEBUG_VIEW
-#define DEBUG_VIEW 0
+#define DEBUG_VIEW 1
 #endif
+
+// --- color space helpers ---
 
 float3 srgb_to_linear(float3 c)
 {
@@ -59,21 +55,19 @@ float3 linear_to_srgb(float3 c)
     return saturate(outc);
 }
 
-// ndc(x,y,z) -> invProj -> divide by w -> invView
-float3 reconstruct_world_pos(float2 uv, float depth01)
+// --- depth reconstruction (d3d 0..1) ---
+
+float3 reconstruct_world_pos(float2 uv, float depth)
 {
     float2 xy_ndc = uv * 2.0 - 1.0;
-    float  z_ndc  = depth01; // d3d is already 0..1
-    float4 p_ndc  = float4(xy_ndc, z_ndc, 1.0);
-
-    float4 p_view = mul(p_ndc, gInvProj);
-    p_view /= max(p_view.w, 1e-6);
-
-    float4 p_world = mul(float4(p_view.xyz, 1.0), gInvView);
-    return p_world.xyz;
+    float  z_ndc  = depth;
+    float4 p_clip = float4(xy_ndc, z_ndc, 1.0);
+    float4 p_world = mul(p_clip, gInvViewProj);
+    return p_world.xyz / max(p_world.w, 1e-6);
 }
 
-// pbr helpers
+// --- pbr helpers ---
+
 float3 fresnel_schlick(float cosTheta, float3 F0)
 {
     return F0 + (1.0 - F0) * pow(saturate(1.0 - cosTheta), 5.0);
@@ -93,68 +87,47 @@ float G_Smith(float NdotV, float NdotL, float k)
     return G_Schlick_GGX(NdotV, k) * G_Schlick_GGX(NdotL, k);
 }
 
-// project to light space; returns false when outside [0,1]
-bool ProjectToShadow(float3 P, out float2 uv, out float z)
+// --- shadowing ---
+
+// returns visibility in [0..1], 1 = fully lit
+// dynamic bias includes a small normal-based slope term and a texel-sized offset
+float ShadowVisibility(float3 P, float3 N, float3 L)
 {
     float4 pL = mul(float4(P,1), gLightViewProj);
     float  w  = max(pL.w, 1e-6);
-    uv = pL.xy / w * 0.5 + 0.5;
-    z  = pL.z / w; // d3d 0..1
-    if (any(uv < 0.0) || any(uv > 1.0))
-        return false;
-    return true;
-}
+    float2 uv = pL.xy / w * 0.5 + 0.5;
+    float  z  = pL.z / w; // d3d 0..1
 
-// returns 0..1 light visibility with 3x3 pcf, texel-based and angle-based bias
-float ShadowVisibility(float3 P, float3 N, float3 L)
-{
-    float2 uv; 
-    float  z;
-    if (!ProjectToShadow(P, uv, z))
+    // outside the map -> lit
+    if (any(uv < 0.0) || any(uv > 1.0))
         return 1.0;
 
-    // receiver-side bias: base + texel + angle
-    const float kTexelBias  = 2.0;    // 1..3, scales with resolution
-    const float kAngleBias  = 0.002;  // small additive for grazing angles
+    // dynamic bias: base bias + texel-sized bias + simple slope bias
+    const float kTexelBias = 1.5; // tweakable scalar for texel bias
+    float texelBias = kTexelBias * max(gShadowTexelSize.x, gShadowTexelSize.y);
 
-    float ndotl = saturate(dot(N, L));
-    float texel = max(gShadowTexelSize.x, gShadowTexelSize.y);
+    // use a cheap slope approximation: surfaces glancing to light need more bias
+    float NdL = saturate(dot(N, L));
+    float slopeBias = (1.0 - NdL) * 0.01; // small, stable
 
-    float bias = gShadowBias
-               + kTexelBias * texel
-               + kAngleBias * (1.0 - ndotl);
+    float dynBias = gShadowBias + texelBias + slopeBias;
 
-    float cmp = z - bias;
+    // hardware pcf compare
+    float cmp = z - dynBias;
+    float vis = ShadowMap.SampleCmpLevelZero(SShadow, uv, cmp);
 
-    // 3x3 hardware pcf
-    float2 t = gShadowTexelSize;
-    float vis = 0.0;
-
-    [unroll] for (int dy = -1; dy <= 1; ++dy)
-    {
-        [unroll] for (int dx = -1; dx <= 1; ++dx)
-        {
-            float2 o = float2(dx, dy) * t;
-            vis += ShadowMap.SampleCmpLevelZero(SShadow, uv + o, cmp);
-        }
-    }
-
-    vis *= (1.0 / 9.0);
     return saturate(vis);
 }
 
-
 float4 PSMain(PSIn i) : SV_Target
 {
-    // g-buffer must be sampled with point clamp (no filtering)
-    float  depth  = GDepth.Sample(SPoint, i.uv).r;
-
+    float  depth  = GDepth.Sample(S0, i.uv).r;
     static const float3 kBg = float3(0.05, 0.05, 0.06);
     if (depth >= 0.9995) return float4(kBg, 1);
 
-    float3 a_srgb = G0.Sample(SPoint, i.uv).rgb;
-    float4 n_r    = G1.Sample(SPoint, i.uv);
-    float3 m_a_e  = G2.Sample(SPoint, i.uv).rgb;
+    float3 a_srgb = G0.Sample(S0, i.uv).rgb;
+    float4 n_r    = G1.Sample(S0, i.uv);
+    float3 m_a_e  = G2.Sample(S0, i.uv).rgb;
 
     float3 N = normalize(n_r.xyz * 2.0 - 1.0);
     float  roughness = saturate(n_r.w);
@@ -167,14 +140,6 @@ float4 PSMain(PSIn i) : SV_Target
     return float4(0.5*(N+1.0),1);
 #elif DEBUG_VIEW == 4
     return float4(depth.xxx,1);
-#elif DEBUG_VIEW == 5
-    {
-        float3 Pw = reconstruct_world_pos(i.uv, depth);
-        float2 suv; float sz;
-        bool inside = ProjectToShadow(Pw, suv, sz);
-        float raw = inside ? ShadowMap.SampleLevel(SPoint, suv, 0).r : 1.0;
-        return float4(raw.xxx, 1);
-    }
 #endif
 
     float3 albedo = srgb_to_linear(a_srgb);
@@ -200,12 +165,9 @@ float4 PSMain(PSIn i) : SV_Target
     float3 kd   = (1.0 - F) * (1.0 - metallic);
     float3 diff = kd * albedo / 3.14159265;
 
-    float visibility = ShadowVisibility(P);
-#if DEBUG_VIEW == 6
-    return float4(visibility.xxx, 1);
-#endif
-
-    visibility = lerp(1.0 - gShadowStrength, 1.0, visibility);
+    // call with full signature (p, n, l)
+    float visibility = ShadowVisibility(P, N, L);
+    visibility = lerp(1.0 - gShadowStrength, 1.0, visibility); // how strong the shadow is
 
     float3 direct = (diff + spec) * gSunColor * (gSunIntensity * NdotL) * visibility;
     float3 ambient = albedo * 0.03 * ao;

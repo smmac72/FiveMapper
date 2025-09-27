@@ -1,29 +1,28 @@
 {
   "version": 3,
-  "cmakeMinimumRequired": {
-    "major": 3, "minor": 25, "patch": 0
-  },
+  "cmakeMinimumRequired": { "major": 3, "minor": 25, "patch": 0 },
   "configurePresets": [
     {
-      "name":       "msvc-x64",
-      "displayName":"Configure for VS2022 x64",
-      "generator":  "Visual Studio 17 2022",
-      "architecture":"x64",
-      "binaryDir":  "${sourceDir}/build/",
+      "name": "msvc-x64",
+      "displayName": "Configure for VS2022 x64 (vcpkg)",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build/",
       "cacheVariables": {
-        "CMAKE_CXX_STANDARD":             "17",
-        "CMAKE_CXX_STANDARD_REQUIRED":    "ON",
-        "CMAKE_MSVC_RUNTIME_LIBRARY":     "MultiThreaded"
+        "CMAKE_CXX_STANDARD": "17",
+        "CMAKE_CXX_STANDARD_REQUIRED": "ON",
+        "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded",
+        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/deps/vcpkg/scripts/buildsystems/vcpkg.cmake"
       }
     }
   ],
   "buildPresets": [
     {
-      "name":            "win64-msvc-release",
-      "displayName":     "Build Release (VS2022 x64)",
+      "name": "win64-msvc-release",
+      "displayName": "Build Release (VS2022 x64)",
       "configurePreset": "msvc-x64",
-      "configuration":   "Release",
-      "cleanFirst":      false
+      "configuration": "Release",
+      "cleanFirst": false
     }
   ]
 }
